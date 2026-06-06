@@ -120,7 +120,7 @@ spec:
     kind: Deployment
     name: qp-api-deploy
   minReplicas: 2
-  maxReplicas: 8
+  maxReplicas: 4
   metrics:
     - type: Resource
       resource:
