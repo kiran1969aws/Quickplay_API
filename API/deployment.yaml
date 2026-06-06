@@ -7,21 +7,19 @@ spec:
   selector:
     matchLabels:
       app: api
-
   strategy:
     type: RollingUpdate
     rollingUpdate:
       maxUnavailable: 0
       maxSurge: 1
-
   template:
     metadata:
       labels:
         app: api
       annotations:
         instrumentation.opentelemetry.io/inject-dotnet: "false"
-
     spec:
+      # ✅ Spread pods evenly across all 4 nodes
       topologySpreadConstraints:
       - maxSkew: 1
         topologyKey: kubernetes.io/hostname
@@ -29,14 +27,11 @@ spec:
         labelSelector:
           matchLabels:
             app: api
-
       containers:
       - name: cont-1
         image: vishalgogula123/quickplay:api-8
-
         ports:
         - containerPort: 5000
-
         lifecycle:
           postStart:
             exec:
@@ -48,20 +43,23 @@ spec:
                 sed -i 's/\r//' /qc/MQS.ini && \
                 sed -i '/^$/d' /qc/MQS.ini && \
                 ln -sf /qc/MQS.ini /qc/mqs.ini
-
         env:
         - name: MQS_INI_PATH
           value: "/qc"
-
         - name: TNS_ADMIN
           value: "/qc"
-
+        # ✅ Server GC: uses all CPUs for garbage collection (better for high throughput)
         - name: DOTNET_gcServer
           value: "1"
-
+        # ✅ Pre-warm threadpool to avoid ramp-up latency under burst load
         - name: DOTNET_ThreadPool_MinThreads
           value: "200"
-
+        # ✅ Added: tune GC to be less aggressive, reduce GC pause under load
+        - name: DOTNET_GCConserveMemory
+          value: "5"
+        # ✅ Added: allow more concurrent connections in HTTP client
+        - name: DOTNET_System_Net_Http_SocketsHttpHandler_Http2MaxStreamsPerConnection
+          value: "100"
         readinessProbe:
           httpGet:
             path: /
@@ -70,7 +68,6 @@ spec:
           periodSeconds: 10
           timeoutSeconds: 5
           failureThreshold: 3
-
         livenessProbe:
           httpGet:
             path: /
@@ -79,16 +76,15 @@ spec:
           periodSeconds: 30
           timeoutSeconds: 5
           failureThreshold: 3
-
         resources:
           requests:
-            cpu: "1000m"
+            # ✅ 8 pods × 1500m = 12,000m at start — fits well within 32 CPUs
+            cpu: "1500m"
             memory: "2000Mi"
-
           limits:
-            cpu: "2000m"
+            # ✅ 10 pods (max HPA) × 2500m = 25,000m — safe ceiling
+            cpu: "2500m"
             memory: "4000Mi"
-
 ---
 apiVersion: v1
 kind: Service
@@ -101,7 +97,6 @@ spec:
   ports:
     - port: 80
       targetPort: 5000
-
 ---
 apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -117,6 +112,10 @@ metadata:
     alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}, {"HTTPS": 443}]'
     alb.ingress.kubernetes.io/ssl-redirect: "443"
     alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:ap-south-1:241431497213:certificate/16a08f0c-614f-49c4-9dc3-93e3d886b038
+    # ✅ Added: increase ALB idle timeout for long-running requests
+    alb.ingress.kubernetes.io/load-balancer-attributes: idle_timeout.timeout_seconds=120
+    # ✅ Added: connection draining so in-flight requests finish before pod removed
+    alb.ingress.kubernetes.io/target-group-attributes: deregistration_delay.timeout_seconds=30
 spec:
   ingressClassName: alb
   rules:
@@ -130,7 +129,6 @@ spec:
                 name: api-service
                 port:
                   number: 80
-
 ---
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
@@ -141,12 +139,28 @@ spec:
     apiVersion: apps/v1
     kind: Deployment
     name: api-deploy
+  # ✅ min stays 8 so all 4 nodes always have 2 pods each
   minReplicas: 8
-  maxReplicas: 20
+  # ✅ Reduced from 20 → 10: 10 × 2500m = 25,000m, safe within 32 CPU budget
+  maxReplicas: 10
   metrics:
     - type: Resource
       resource:
         name: cpu
         target:
           type: Utilization
-          averageUtilization: 60
+          # ✅ Raised from 60% → 75%: squeeze more work per pod before scaling out
+          averageUtilization: 75
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 30       # ✅ scale up quickly under burst
+      policies:
+      - type: Pods
+        value: 2
+        periodSeconds: 30
+    scaleDown:
+      stabilizationWindowSeconds: 120      # ✅ don't scale down too fast, avoid yo-yo
+      policies:
+      - type: Pods
+        value: 1
+        periodSeconds: 60
