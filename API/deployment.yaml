@@ -7,49 +7,87 @@ spec:
   selector:
     matchLabels:
       app: api
+
   strategy:
     type: RollingUpdate
     rollingUpdate:
       maxUnavailable: 0
       maxSurge: 1
+
   template:
     metadata:
       labels:
         app: api
       annotations:
         instrumentation.opentelemetry.io/inject-dotnet: "false"
+
     spec:
+      topologySpreadConstraints:
+      - maxSkew: 1
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: ScheduleAnyway
+        labelSelector:
+          matchLabels:
+            app: api
+
       containers:
-        - name: cont-1
-          image: vishalgogula123/quickplay:api-8
-          ports:
-            - containerPort: 5000
+      - name: cont-1
+        image: vishalgogula123/quickplay:api-8
 
-          lifecycle:
-            postStart:
-              exec:
-                command:
-                  - "/bin/sh"
-                  - "-c"
-                  - |
-                    sleep 2 && \
-                    sed -i 's/\r//' /qc/MQS.ini && \
-                    sed -i '/^$/d' /qc/MQS.ini && \
-                    ln -sf /qc/MQS.ini /qc/mqs.ini
+        ports:
+        - containerPort: 5000
 
-          env:
-            - name: MQS_INI_PATH
-              value: "/qc"
-            - name: TNS_ADMIN
-              value: "/qc"
+        lifecycle:
+          postStart:
+            exec:
+              command:
+              - /bin/sh
+              - -c
+              - |
+                sleep 2 && \
+                sed -i 's/\r//' /qc/MQS.ini && \
+                sed -i '/^$/d' /qc/MQS.ini && \
+                ln -sf /qc/MQS.ini /qc/mqs.ini
 
-          resources:
-            requests:
-              cpu: "1000m"
-              memory: "2000Mi"
-            limits:
-              cpu: "2000m"
-              memory: "4000Mi"
+        env:
+        - name: MQS_INI_PATH
+          value: "/qc"
+
+        - name: TNS_ADMIN
+          value: "/qc"
+
+        - name: DOTNET_gcServer
+          value: "1"
+
+        - name: DOTNET_ThreadPool_MinThreads
+          value: "200"
+
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 5000
+          initialDelaySeconds: 15
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 5000
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          timeoutSeconds: 5
+          failureThreshold: 3
+
+        resources:
+          requests:
+            cpu: "1000m"
+            memory: "2000Mi"
+
+          limits:
+            cpu: "2000m"
+            memory: "4000Mi"
 
 ---
 apiVersion: v1
@@ -104,7 +142,7 @@ spec:
     kind: Deployment
     name: api-deploy
   minReplicas: 3
-  maxReplicas: 12
+  maxReplicas: 20
   metrics:
     - type: Resource
       resource:
