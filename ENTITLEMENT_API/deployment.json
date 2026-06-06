@@ -1,0 +1,130 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: qp-api-deploy
+  namespace: quickplay
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: qp-api
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app: qp-api
+      annotations:
+        instrumentation.opentelemetry.io/inject-dotnet: "false"
+        instrumentation.opentelemetry.io/inject-java: "false"
+        instrumentation.opentelemetry.io/inject-nodejs: "false"
+        instrumentation.opentelemetry.io/inject-python: "false"
+    spec:
+      containers:
+        - name: cont-1
+          image: vishalgogula123/quickplay_live:qp-api
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 5000
+          lifecycle:
+            postStart:
+              exec:
+                command:
+                  - /bin/sh
+                  - -c
+                  - |
+                    sleep 2
+                    sed -i 's/\r//' /qc/MQS.ini
+                    sed -i '/^$/d' /qc/MQS.ini
+                    ln -sf /qc/MQS.ini /qc/mqs.ini
+          env:
+            - name: MQS_INI_PATH
+              value: /qc
+            - name: TNS_ADMIN
+              value: "/qc"
+
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 5000
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+          resources:
+            requests:
+              cpu: "2000m"
+              memory: "4000Mi"
+            limits:
+              cpu: "4000m"
+              memory: "6000Mi"
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: qp-api-service
+  namespace: quickplay
+spec:
+  type: ClusterIP
+  selector:
+    app: qp-api
+  ports:
+    - name: http
+      port: 80
+      targetPort: 5000
+
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: qp-api-ingress
+  namespace: quickplay
+  annotations:
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/healthcheck-path: /
+    alb.ingress.kubernetes.io/healthcheck-protocol: HTTP
+    alb.ingress.kubernetes.io/healthcheck-port: traffic-port
+    alb.ingress.kubernetes.io/success-codes: "200"
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP":80},{"HTTPS":443}]'
+    alb.ingress.kubernetes.io/ssl-redirect: "443"
+    alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:ap-south-1:241431497213:certificate/2a0681fd-cea6-42b7-9216-8bbdb74fd4f1
+spec:
+  ingressClassName: alb
+  rules:
+    - host: quickplayapi.mqbench.magnaquest.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: qp-api-service
+                port:
+                  number: 80
+
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: qp-api-hpa
+  namespace: quickplay
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: qp-api-deploy
+  minReplicas: 2
+  maxReplicas: 8
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 60
