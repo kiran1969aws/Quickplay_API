@@ -23,6 +23,14 @@ spec:
         instrumentation.opentelemetry.io/inject-nodejs: "false"
         instrumentation.opentelemetry.io/inject-python: "false"
     spec:
+      # ✅ Added: spread qp-api pods across nodes, don't stack on same node as api-deploy
+      topologySpreadConstraints:
+      - maxSkew: 1
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: ScheduleAnyway
+        labelSelector:
+          matchLabels:
+            app: qp-api
       containers:
         - name: cont-1
           image: vishalgogula123/quickplay_live:qp-api
@@ -45,7 +53,15 @@ spec:
               value: /qc
             - name: TNS_ADMIN
               value: "/qc"
-
+            # ✅ Added: Server GC — was missing, critical for high throughput .NET apps
+            - name: DOTNET_gcServer
+              value: "1"
+            # ✅ Added: pre-warm threadpool — was missing from qp-api, now matches api-deploy
+            - name: DOTNET_ThreadPool_MinThreads
+              value: "200"
+            # ✅ Added: reduce GC pressure under sustained load
+            - name: DOTNET_GCConserveMemory
+              value: "5"
           livenessProbe:
             httpGet:
               path: /
@@ -54,15 +70,24 @@ spec:
             periodSeconds: 20
             timeoutSeconds: 5
             failureThreshold: 3
-
+          # ✅ Added: readinessProbe was missing — without it, pods get traffic before ready
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 5000
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
           resources:
             requests:
-              cpu: "2000m"
-              memory: "4000Mi"
+              # ✅ 2 pods × 800m = 1,600m request — lightweight, leaves room for api-deploy
+              cpu: "800m"
+              memory: "2000Mi"
             limits:
-              cpu: "4000m"
-              memory: "6000Mi"
-
+              # ✅ 4 pods (max HPA) × 1500m = 6,000m — total with api-deploy = 31,000m ✅
+              cpu: "1500m"
+              memory: "4000Mi"
 ---
 apiVersion: v1
 kind: Service
@@ -77,7 +102,6 @@ spec:
     - name: http
       port: 80
       targetPort: 5000
-
 ---
 apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -94,6 +118,9 @@ metadata:
     alb.ingress.kubernetes.io/listen-ports: '[{"HTTP":80},{"HTTPS":443}]'
     alb.ingress.kubernetes.io/ssl-redirect: "443"
     alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:ap-south-1:241431497213:certificate/2a0681fd-cea6-42b7-9216-8bbdb74fd4f1
+    # ✅ Added: connection draining — finish in-flight requests before pod terminates
+    alb.ingress.kubernetes.io/target-group-attributes: deregistration_delay.timeout_seconds=30
+    alb.ingress.kubernetes.io/load-balancer-attributes: idle_timeout.timeout_seconds=120
 spec:
   ingressClassName: alb
   rules:
@@ -107,7 +134,6 @@ spec:
                 name: qp-api-service
                 port:
                   number: 80
-
 ---
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
@@ -120,6 +146,7 @@ spec:
     kind: Deployment
     name: qp-api-deploy
   minReplicas: 2
+  # ✅ max 4 pods × 1500m = 6,000m — fits within budget alongside api-deploy
   maxReplicas: 4
   metrics:
     - type: Resource
@@ -127,4 +154,18 @@ spec:
         name: cpu
         target:
           type: Utilization
-          averageUtilization: 60
+          # ✅ Raised from 60% → 75%: get more work per pod before scaling out
+          averageUtilization: 75
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 30
+      policies:
+      - type: Pods
+        value: 1
+        periodSeconds: 30
+    scaleDown:
+      stabilizationWindowSeconds: 120
+      policies:
+      - type: Pods
+        value: 1
+        periodSeconds: 60
