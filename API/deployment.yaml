@@ -3,7 +3,7 @@ kind: Deployment
 metadata:
   name: api-deploy
 spec:
-  replicas: 8
+  replicas: 1
   selector:
     matchLabels:
       app: api
@@ -140,7 +140,7 @@ spec:
     kind: Deployment
     name: api-deploy
   # ✅ min stays 8 so all 4 nodes always have 2 pods each
-  minReplicas: 8
+  minReplicas: 1
   # ✅ Reduced from 20 → 10: 10 × 2500m = 25,000m, safe within 32 CPU budget
   maxReplicas: 10
   metrics:
