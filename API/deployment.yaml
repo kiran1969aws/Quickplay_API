@@ -1,144 +1,144 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-name: api-deploy
+  name: api-deploy
 spec:
-replicas: 8
-selector:
-matchLabels:
-app: api
+  replicas: 8
 
-strategy:
-type: RollingUpdate
-rollingUpdate:
-maxUnavailable: 0
-maxSurge: 1
+  selector:
+    matchLabels:
+      app: api
 
-template:
-metadata:
-labels:
-app: api
-annotations:
-instrumentation.opentelemetry.io/inject-dotnet: "false"
-prometheus.io/scrape: "true"
-prometheus.io/port: "52323"
-prometheus.io/path: "/metrics"
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
 
-```
-spec:
-
-  topologySpreadConstraints:
-  - maxSkew: 1
-    topologyKey: kubernetes.io/hostname
-    whenUnsatisfiable: ScheduleAnyway
-    labelSelector:
-      matchLabels:
+  template:
+    metadata:
+      labels:
         app: api
+      annotations:
+        instrumentation.opentelemetry.io/inject-dotnet: "false"
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "52323"
+        prometheus.io/path: "/metrics"
 
-  volumes:
-  - name: diagnostics
-    emptyDir: {}
+    spec:
+      topologySpreadConstraints:
+      - maxSkew: 1
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: ScheduleAnyway
+        labelSelector:
+          matchLabels:
+            app: api
 
-  containers:
+      volumes:
+      - name: diagnostics
+        emptyDir: {}
 
-  - name: cont-1
-    image: vishalgogula123/quickplay:api-8
+      containers:
 
-    ports:
-    - containerPort: 5000
+      - name: cont-1
+        image: vishalgogula123/quickplay:api-8
 
-    lifecycle:
-      postStart:
-        exec:
-          command:
-          - /bin/sh
-          - -c
-          - |
-            sleep 2 && \
-            sed -i 's/\r//' /qc/MQS.ini && \
-            sed -i '/^$/d' /qc/MQS.ini && \
-            ln -sf /qc/MQS.ini /qc/mqs.ini
+        ports:
+        - containerPort: 5000
 
-    env:
-    - name: MQS_INI_PATH
-      value: "/qc"
+        lifecycle:
+          postStart:
+            exec:
+              command:
+              - /bin/sh
+              - -c
+              - |
+                sleep 2
+                sed -i 's/\r//' /qc/MQS.ini
+                sed -i '/^$/d' /qc/MQS.ini
+                ln -sf /qc/MQS.ini /qc/mqs.ini
 
-    - name: TNS_ADMIN
-      value: "/qc"
+        env:
+        - name: MQS_INI_PATH
+          value: "/qc"
 
-    - name: DOTNET_gcServer
-      value: "1"
+        - name: TNS_ADMIN
+          value: "/qc"
 
-    - name: DOTNET_ThreadPool_MinThreads
-      value: "200"
+        - name: DOTNET_gcServer
+          value: "1"
 
-    - name: DOTNET_GCConserveMemory
-      value: "5"
+        - name: DOTNET_ThreadPool_MinThreads
+          value: "200"
 
-    - name: DOTNET_System_Net_Http_SocketsHttpHandler_Http2MaxStreamsPerConnection
-      value: "100"
+        - name: DOTNET_GCConserveMemory
+          value: "5"
 
-    - name: DOTNET_DiagnosticPorts
-      value: "/diag/port,suspend=n,listen=y"
+        - name: DOTNET_System_Net_Http_SocketsHttpHandler_Http2MaxStreamsPerConnection
+          value: "100"
 
-    volumeMounts:
-    - name: diagnostics
-      mountPath: /diag
+        - name: DOTNET_DiagnosticPorts
+          value: "/diag/port,suspend=n,listen=y"
 
-    readinessProbe:
-      httpGet:
-        path: /
-        port: 5000
-      initialDelaySeconds: 15
-      periodSeconds: 10
-      timeoutSeconds: 5
-      failureThreshold: 3
+        volumeMounts:
+        - name: diagnostics
+          mountPath: /diag
 
-    livenessProbe:
-      httpGet:
-        path: /
-        port: 5000
-      initialDelaySeconds: 60
-      periodSeconds: 30
-      timeoutSeconds: 5
-      failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 5000
+          initialDelaySeconds: 15
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
 
-    resources:
-      requests:
-        cpu: "1500m"
-        memory: "2000Mi"
-      limits:
-        cpu: "2500m"
-        memory: "4000Mi"
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 5000
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          timeoutSeconds: 5
+          failureThreshold: 3
 
-  - name: dotnet-monitor
-    image: mcr.microsoft.com/dotnet/monitor:9
+        resources:
+          requests:
+            cpu: "1500m"
+            memory: "2000Mi"
+          limits:
+            cpu: "2500m"
+            memory: "4000Mi"
 
-    ports:
-    - containerPort: 52323
-      name: monitor
+      - name: dotnet-monitor
+        image: mcr.microsoft.com/dotnet/monitor:8
 
-    env:
-    - name: DOTNETMONITOR_DiagnosticPort__ConnectionMode
-      value: Listen
+        ports:
+        - name: monitor
+          containerPort: 52323
 
-    - name: DOTNETMONITOR_DiagnosticPort__EndpointName
-      value: /diag/port
+        env:
+        - name: DOTNETMONITOR_DiagnosticPort__ConnectionMode
+          value: "Listen"
 
-    - name: DOTNETMONITOR_Urls
-      value: http://*:52323
+        - name: DOTNETMONITOR_DiagnosticPort__EndpointName
+          value: "/diag/port"
 
-    volumeMounts:
-    - name: diagnostics
-      mountPath: /diag
+        - name: DOTNETMONITOR_Urls
+          value: "http://*:52323"
 
-    resources:
-      requests:
-        cpu: 100m
-        memory: 256Mi
-      limits:
-        cpu: 500m
-        memory: 512Mi
+        volumeMounts:
+        - name: diagnostics
+          mountPath: /diag
+
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "256Mi"
+          limits:
+            cpu: "500m"
+            memory: "512Mi"
+
 ---
 apiVersion: v1
 kind: Service
@@ -146,11 +146,15 @@ metadata:
   name: api-service
 spec:
   type: ClusterIP
+
   selector:
     app: api
+
   ports:
-    - port: 80
-      targetPort: 5000
+  - name: http
+    port: 80
+    targetPort: 5000
+
 ---
 apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -161,59 +165,62 @@ metadata:
     alb.ingress.kubernetes.io/target-type: ip
     alb.ingress.kubernetes.io/healthcheck-path: /
     alb.ingress.kubernetes.io/healthcheck-protocol: HTTP
-    alb.ingress.kubernetes.io/healthcheck-port: "traffic-port"
+    alb.ingress.kubernetes.io/healthcheck-port: traffic-port
     alb.ingress.kubernetes.io/success-codes: "200"
-    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}, {"HTTPS": 443}]'
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP":80},{"HTTPS":443}]'
     alb.ingress.kubernetes.io/ssl-redirect: "443"
     alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:ap-south-1:241431497213:certificate/16a08f0c-614f-49c4-9dc3-93e3d886b038
-    # ✅ Added: increase ALB idle timeout for long-running requests
     alb.ingress.kubernetes.io/load-balancer-attributes: idle_timeout.timeout_seconds=120
-    # ✅ Added: connection draining so in-flight requests finish before pod removed
     alb.ingress.kubernetes.io/target-group-attributes: deregistration_delay.timeout_seconds=30
+
 spec:
   ingressClassName: alb
+
   rules:
-    - host: quickplayapi1.mqbench.magnaquest.com
-      http:
-        paths:
-          - path: /
-            pathType: Prefix
-            backend:
-              service:
-                name: api-service
-                port:
-                  number: 80
+  - host: quickplayapi1.mqbench.magnaquest.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: api-service
+            port:
+              number: 80
+
 ---
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
   name: api-hpa
+
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
     name: api-deploy
-  # ✅ min stays 8 so all 4 nodes always have 2 pods each
+
   minReplicas: 8
-  # ✅ Reduced from 20 → 10: 10 × 2500m = 25,000m, safe within 32 CPU budget
   maxReplicas: 20
+
   metrics:
-    - type: Resource
-      resource:
-        name: cpu
-        target:
-          type: Utilization
-          # ✅ Raised from 60% → 75%: squeeze more work per pod before scaling out
-          averageUtilization: 75
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 75
+
   behavior:
     scaleUp:
-      stabilizationWindowSeconds: 30       # ✅ scale up quickly under burst
+      stabilizationWindowSeconds: 30
       policies:
       - type: Pods
         value: 2
         periodSeconds: 30
+
     scaleDown:
-      stabilizationWindowSeconds: 120      # ✅ don't scale down too fast, avoid yo-yo
+      stabilizationWindowSeconds: 120
       policies:
       - type: Pods
         value: 1
