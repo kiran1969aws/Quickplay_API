@@ -4,7 +4,7 @@ metadata:
   name: qp-api-deploy
   namespace: quickplay
 spec:
-  replicas: 1
+  replicas: 2
   selector:
     matchLabels:
       app: qp-api
@@ -145,9 +145,9 @@ spec:
     apiVersion: apps/v1
     kind: Deployment
     name: qp-api-deploy
-  minReplicas: 1
+  minReplicas: 2
   # ✅ max 4 pods × 1500m = 6,000m — fits within budget alongside api-deploy
-  maxReplicas: 4
+  maxReplicas: 8
   metrics:
     - type: Resource
       resource:
