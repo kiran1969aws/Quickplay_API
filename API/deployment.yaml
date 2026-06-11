@@ -1,90 +1,144 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: api-deploy
+name: api-deploy
 spec:
-  replicas: 8
-  selector:
-    matchLabels:
-      app: api
-  strategy:
-    type: RollingUpdate
-    rollingUpdate:
-      maxUnavailable: 0
-      maxSurge: 1
-  template:
-    metadata:
-      labels:
+replicas: 8
+selector:
+matchLabels:
+app: api
+
+strategy:
+type: RollingUpdate
+rollingUpdate:
+maxUnavailable: 0
+maxSurge: 1
+
+template:
+metadata:
+labels:
+app: api
+annotations:
+instrumentation.opentelemetry.io/inject-dotnet: "false"
+prometheus.io/scrape: "true"
+prometheus.io/port: "52323"
+prometheus.io/path: "/metrics"
+
+```
+spec:
+
+  topologySpreadConstraints:
+  - maxSkew: 1
+    topologyKey: kubernetes.io/hostname
+    whenUnsatisfiable: ScheduleAnyway
+    labelSelector:
+      matchLabels:
         app: api
-      annotations:
-        instrumentation.opentelemetry.io/inject-dotnet: "false"
-    spec:
-      # ✅ Spread pods evenly across all 4 nodes
-      topologySpreadConstraints:
-      - maxSkew: 1
-        topologyKey: kubernetes.io/hostname
-        whenUnsatisfiable: ScheduleAnyway
-        labelSelector:
-          matchLabels:
-            app: api
-      containers:
-      - name: cont-1
-        image: vishalgogula123/quickplay:api-8
-        ports:
-        - containerPort: 5000
-        lifecycle:
-          postStart:
-            exec:
-              command:
-              - /bin/sh
-              - -c
-              - |
-                sleep 2 && \
-                sed -i 's/\r//' /qc/MQS.ini && \
-                sed -i '/^$/d' /qc/MQS.ini && \
-                ln -sf /qc/MQS.ini /qc/mqs.ini
-        env:
-        - name: MQS_INI_PATH
-          value: "/qc"
-        - name: TNS_ADMIN
-          value: "/qc"
-        # ✅ Server GC: uses all CPUs for garbage collection (better for high throughput)
-        - name: DOTNET_gcServer
-          value: "1"
-        # ✅ Pre-warm threadpool to avoid ramp-up latency under burst load
-        - name: DOTNET_ThreadPool_MinThreads
-          value: "200"
-        # ✅ Added: tune GC to be less aggressive, reduce GC pause under load
-        - name: DOTNET_GCConserveMemory
-          value: "5"
-        # ✅ Added: allow more concurrent connections in HTTP client
-        - name: DOTNET_System_Net_Http_SocketsHttpHandler_Http2MaxStreamsPerConnection
-          value: "100"
-        readinessProbe:
-          httpGet:
-            path: /
-            port: 5000
-          initialDelaySeconds: 15
-          periodSeconds: 10
-          timeoutSeconds: 5
-          failureThreshold: 3
-        livenessProbe:
-          httpGet:
-            path: /
-            port: 5000
-          initialDelaySeconds: 60
-          periodSeconds: 30
-          timeoutSeconds: 5
-          failureThreshold: 3
-        resources:
-          requests:
-            # ✅ 8 pods × 1500m = 12,000m at start — fits well within 32 CPUs
-            cpu: "1500m"
-            memory: "2000Mi"
-          limits:
-            # ✅ 10 pods (max HPA) × 2500m = 25,000m — safe ceiling
-            cpu: "2500m"
-            memory: "4000Mi"
+
+  volumes:
+  - name: diagnostics
+    emptyDir: {}
+
+  containers:
+
+  - name: cont-1
+    image: vishalgogula123/quickplay:api-8
+
+    ports:
+    - containerPort: 5000
+
+    lifecycle:
+      postStart:
+        exec:
+          command:
+          - /bin/sh
+          - -c
+          - |
+            sleep 2 && \
+            sed -i 's/\r//' /qc/MQS.ini && \
+            sed -i '/^$/d' /qc/MQS.ini && \
+            ln -sf /qc/MQS.ini /qc/mqs.ini
+
+    env:
+    - name: MQS_INI_PATH
+      value: "/qc"
+
+    - name: TNS_ADMIN
+      value: "/qc"
+
+    - name: DOTNET_gcServer
+      value: "1"
+
+    - name: DOTNET_ThreadPool_MinThreads
+      value: "200"
+
+    - name: DOTNET_GCConserveMemory
+      value: "5"
+
+    - name: DOTNET_System_Net_Http_SocketsHttpHandler_Http2MaxStreamsPerConnection
+      value: "100"
+
+    - name: DOTNET_DiagnosticPorts
+      value: "/diag/port,suspend=n,listen=y"
+
+    volumeMounts:
+    - name: diagnostics
+      mountPath: /diag
+
+    readinessProbe:
+      httpGet:
+        path: /
+        port: 5000
+      initialDelaySeconds: 15
+      periodSeconds: 10
+      timeoutSeconds: 5
+      failureThreshold: 3
+
+    livenessProbe:
+      httpGet:
+        path: /
+        port: 5000
+      initialDelaySeconds: 60
+      periodSeconds: 30
+      timeoutSeconds: 5
+      failureThreshold: 3
+
+    resources:
+      requests:
+        cpu: "1500m"
+        memory: "2000Mi"
+      limits:
+        cpu: "2500m"
+        memory: "4000Mi"
+
+  - name: dotnet-monitor
+    image: mcr.microsoft.com/dotnet/monitor:9
+
+    ports:
+    - containerPort: 52323
+      name: monitor
+
+    env:
+    - name: DOTNETMONITOR_DiagnosticPort__ConnectionMode
+      value: Listen
+
+    - name: DOTNETMONITOR_DiagnosticPort__EndpointName
+      value: /diag/port
+
+    - name: DOTNETMONITOR_Urls
+      value: http://*:52323
+
+    volumeMounts:
+    - name: diagnostics
+      mountPath: /diag
+
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
 ---
 apiVersion: v1
 kind: Service
